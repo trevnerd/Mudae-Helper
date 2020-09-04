@@ -222,14 +222,17 @@ class LotteryMessage(MudaeMessage):
     def click_reaction(self, bot: HelperBot, index=0):
         #TODO: implement wait for reaction to appear (cause i know it will appear since it is a LotteryMessage)
         sleep(1)
+        reaction_elements: List[WebElement]
         reaction_elements = self.web_element.find_elements_by_class_name(Message.reactions_element_class_name)
+        reaction_start_state = 'reactionMe-wv5HKu' in reaction_elements[index].get_attribute('class')
         print(self.web_element.text)
         #NOTE: other elements on the page can block reactions - how do i get around this
         #      so that it always works??
         #      The problem seems to be the jump to bottom button getting in the way when the END key is pressed
         #       to fix i will just add a down arrow pess in the case of failure
         # this line seems to fix the issue
-        webdriver.ActionChains(bot.driver).move_to_element(reaction_elements[index]).click(reaction_elements[index])
+        #webdriver.ActionChains(bot.driver).move_to_element(reaction_elements[index]).click(reaction_elements[index])
+        bot.driver.execute_script('arguments[0].click()', reaction_elements[index].find_element_by_class_name('reactionInner-15NvIl'))
         #TODO: maybe start using screenshots for debugging
         """
         try: 
@@ -243,6 +246,8 @@ class LotteryMessage(MudaeMessage):
             reaction_elements[index].click()
         """
         print('click')
+        reaction_end_state = 'reactionMe-wv5HKu' in reaction_elements[index].get_attribute('class')
+        assert reaction_start_state != reaction_end_state, f'start_state: {reaction_start_state}, end_state: {reaction_end_state}'
 
     def is_lottery_message(self) -> bool:
         img_src_text = ''
@@ -250,7 +255,7 @@ class LotteryMessage(MudaeMessage):
         try:
             images = self.web_element.find_element_by_class_name(LotteryMessage.embed_description_element_class_name).find_elements_by_tag_name('img')
             if len(images) == 1:
-                img_src_text = images[0].get_property('src')
+                img_src_text = images[0].get_property('src') #why does get_property work here but not other places??
                 full_desc_text = self.web_element.find_element_by_class_name(LotteryMessage.embed_description_element_class_name).text
         finally:
             return img_src_text == 'https://cdn.discordapp.com/emojis/469835869059153940.png?v=1' and 'Claims: #' in full_desc_text and 'Likes: #' in full_desc_text
@@ -309,3 +314,10 @@ if __name__ == '__main__':
         sleep(2)
 
 #WebElement().location_once_scrolled_into_view
+#%%
+"""
+reaction_elements: List[WebElement]
+reaction_elements = Message.get_context(bot)[0].web_element.find_elements_by_class_name(Message.reactions_element_class_name)
+print(reaction_elements[0])
+bot.driver.execute_script('arguments[0].click();', reaction_elements[0].find_element_by_class_name('reactionInner-15NvIl'))
+"""
