@@ -4,7 +4,7 @@ from selenium import webdriver
 #from selenium.webdriver import WebDriver
 from time import sleep
 from selenium.webdriver.remote.webelement import WebElement
-from selenium.common.exceptions import NoSuchElementException, StaleElementReferenceException
+from selenium.common.exceptions import NoSuchElementException, StaleElementReferenceException, ElementClickInterceptedException
 from selenium.webdriver.common.keys import Keys
 from typing import List
 from bs4 import BeautifulSoup
@@ -50,7 +50,7 @@ class HelperBot:
         self.driver.find_element_by_class_name('jumpButton-JkYoYK').click()
         self.driver.find_element_by_class_name('icon-38sknP').click()
         #press end key to scroll remainder of page
-        self.driver.find_element_by_class_name('content-yTz4x3').click()
+        self.driver.find_element_by_class_name('scroller-2LSbBU').click()
         #there must be a better way lol
         webdriver.ActionChains(self.driver).send_keys(Keys.END).perform()
         sleep(1)
@@ -179,8 +179,8 @@ class Message:
     @staticmethod
     def set_context(new_context: List[Message]):
         new_context = new_context + Message._context
-        if len(new_context) >= 100:
-            new_context = new_context[:100]
+        if len(new_context) >= 60:
+            new_context = new_context[:60]
         for j, msg in enumerate(new_context):
             msg.context_index = j
         Message._context = new_context
@@ -224,7 +224,24 @@ class LotteryMessage(MudaeMessage):
         sleep(1)
         reaction_elements = self.web_element.find_elements_by_class_name(Message.reactions_element_class_name)
         print(self.web_element.text)
-        reaction_elements[index].click()
+        #NOTE: other elements on the page can block reactions - how do i get around this
+        #      so that it always works??
+        #      The problem seems to be the jump to bottom button getting in the way when the END key is pressed
+        #       to fix i will just add a down arrow pess in the case of failure
+        # this line seems to fix the issue
+        webdriver.ActionChains(bot.driver).move_to_element(reaction_elements[index]).click(reaction_elements[index])
+        #TODO: maybe start using screenshots for debugging
+        """
+        try: 
+            reaction_elements[index].click()
+        except ElementClickInterceptedException:
+            print('reaction click exception')
+            bot.driver.find_element_by_class_name('scroller-2LSbBU').click()
+            #there must be a better way lol
+            webdriver.ActionChains(bot.driver).send_keys(Keys.ARROW_DOWN).perform()
+            sleep(0.3)
+            reaction_elements[index].click()
+        """
         print('click')
 
     def is_lottery_message(self) -> bool:
@@ -268,8 +285,8 @@ time_stamp_element_selector = 'span.timestamp-3ZCmNB > span' # get aria-label pr
 
 #%%
 #log this data somewhere
-#Message._context = []
-if __name__ == '__main__':        
+Message._context = [] # for jupyter server debugging
+if __name__ == '__main__':
     while True:
         for msg in Message.get_context(bot):
             #print(msg)
@@ -286,7 +303,9 @@ if __name__ == '__main__':
                 else:
                     print(' - '.join(['not married', msg.character]))
             msg.is_viewed = True
-        bot.driver.find_element_by_class_name('content-yTz4x3').click()
+        bot.driver.find_element_by_class_name('scroller-2LSbBU').click()
         #there must be a better way lol
         webdriver.ActionChains(bot.driver).send_keys(Keys.END).perform()
         sleep(2)
+
+#WebElement().location_once_scrolled_into_view
