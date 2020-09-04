@@ -44,7 +44,7 @@ class HelperBot:
         sleep(5)
     
     def scroll_to_bottom(self): # doesn't completely work properly
-        self.driver.find_element_by_class_name('public-DraftStyleDefault-block').send_keys('in:mudae\n')
+        self.driver.find_element_by_class_name('public-DraftStyleDefault-block').send_keys('in:mudae-rolls\n')
         sleep(1)
         self.driver.find_element_by_class_name('hit-1fVM9e').find_element_by_class_name('header-23xsNx').click()
         self.driver.find_element_by_class_name('jumpButton-JkYoYK').click()
@@ -75,7 +75,12 @@ class Message:
         self._context_index = context_index
 
         self.is_group_starter: bool
-        self.is_group_starter = Message.message_element_group_start_class_name in self.web_element.get_attribute('class').split(' ')
+        try:
+            self.is_group_starter = Message.message_element_group_start_class_name in self.web_element.get_attribute('class').split(' ')
+        except StaleElementReferenceException:
+            #TODO: find a better way to handel all stale web_elements
+            print('stale element for some reason!')
+            self.is_group_starter = None
 
         self._group_starter: Message
         if self.is_group_starter:
@@ -85,7 +90,11 @@ class Message:
 
         self._author: str
         if self.is_group_starter:
-            self._author = self.web_element.find_element_by_class_name(Message.author_element_class_name).text
+            try:
+                self._author = self.web_element.find_element_by_class_name(Message.author_element_class_name).text
+            except NoSuchElementException:
+                #can occur because of pinned messages
+                self._author = 'Pin'
         else:
             self._author = 'Unknown'
 
@@ -214,6 +223,7 @@ class LotteryMessage(MudaeMessage):
         #TODO: implement wait for reaction to appear (cause i know it will appear since it is a LotteryMessage)
         sleep(1)
         reaction_elements = self.web_element.find_elements_by_class_name(Message.reactions_element_class_name)
+        print(self.web_element.text)
         reaction_elements[index].click()
         print('click')
 
@@ -245,7 +255,7 @@ bot = HelperBot()
 #create a selector based on myanimelist?
 
 #saved constants
-search_chat = 'in:mudae'
+search_chat = 'in:mudae-rolls'
 jump_button = 'jumpButton-JkYoYK'
 search_input_field = 'public-DraftStyleDefault-block'
 search_message = 'hit-1fVM9e'
@@ -258,6 +268,7 @@ time_stamp_element_selector = 'span.timestamp-3ZCmNB > span' # get aria-label pr
 
 #%%
 #log this data somewhere
+#Message._context = []
 if __name__ == '__main__':        
     while True:
         for msg in Message.get_context(bot):
@@ -269,7 +280,7 @@ if __name__ == '__main__':
                 if msg.is_married:
                     msg.click_reaction(bot)
                     print(' - '.join(['married', msg.character]))
-                elif msg.value > 300:
+                elif msg.value > 200:
                     msg.click_reaction(bot)
                     print(' - '.join(['I just married', msg.character]))
                 else:
