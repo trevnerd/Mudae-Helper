@@ -6,6 +6,7 @@ from time import sleep
 from selenium.webdriver.remote.webelement import WebElement
 from selenium.common.exceptions import NoSuchElementException, StaleElementReferenceException, ElementClickInterceptedException
 from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.support.ui import WebDriverWait
 from typing import List
 from bs4 import BeautifulSoup
 
@@ -19,41 +20,51 @@ if not os.path.isfile('secret.py'): #TODO: robustify
 import secret
 
 
-class HelperBot:
+class HelperBot: #should rename to DiscordMessanger or something
     """An object which helps interact with a 'standard' discord page - maybe rename from HelperBot"""
     #TODO: make more generally applicable to any discord use
+
+    #CONSTANTS
+    text_field_element_selector = '#app-mount > div.app-1q1i1E > div > div.layers-3iHuyZ.layers-3q14ss > div > div > div > div.content-98HsJk > div.chat-3bRxxu > div > main > form > div > div > div > div > div.textArea-12jD-V.textAreaSlate-1ZzRVj.slateContainer-3Qkn2x > div.markup-2BOw-j.slateTextArea-1Mkdgw.fontSize16Padding-3Wk7zP > div'
+
     def __init__(self):
         self.text_field: WebElement
 
         self.driver = webdriver.Chrome()
         self.login()
+        WebDriverWait(self.driver, timeout=15, poll_frequency=1).until(lambda d: d.find_element_by_class_name('container-1r6BKw'))
         self.driver.get(secret.mudae_channel)
-        sleep(5)
-        self.text_field = self.driver.find_element_by_css_selector('#app-mount > div.app-1q1i1E > div > div.layers-3iHuyZ.layers-3q14ss > div > div > div > div.content-98HsJk > div.chat-3bRxxu > div > main > form > div > div > div > div > div.textArea-12jD-V.textAreaSlate-1ZzRVj.slateContainer-3Qkn2x > div.markup-2BOw-j.slateTextArea-1Mkdgw.fontSize16Padding-3Wk7zP > div')
+        WebDriverWait(self.driver, timeout=15, poll_frequency=1).until(lambda d: d.find_element_by_css_selector(HelperBot.text_field_element_selector))
+        self.text_field = self.driver.find_element_by_css_selector(HelperBot.text_field_element_selector)
         self.scroll_to_bottom()
 
     def login(self):
         self.driver.get('https://discord.com/login')
+        WebDriverWait(self.driver, timeout=15, poll_frequency=0.2).until(lambda d: d.find_element_by_xpath('//*[@id="app-mount"]/div[2]/div/div[2]/div/div/form/div/div/div[1]/div[3]/div[1]/div/input'))
         self.driver.find_element_by_xpath('//*[@id="app-mount"]/div[2]/div/div[2]/div/div/form/div/div/div[1]/div[3]/div[1]/div/input').send_keys(secret.email)
         self.driver.find_element_by_xpath('//*[@id="app-mount"]/div[2]/div/div[2]/div/div/form/div/div/div[1]/div[3]/div[2]/div/input').send_keys(secret.pw)
         self.driver.find_element_by_xpath('//*[@id="app-mount"]/div[2]/div/div[2]/div/div/form/div/div/div[1]/div[3]/button[2]').click()
-        sleep(5) #TODO: replace sleeps with proper wait conditions
+        #sleep(5)
 
     def send_message(self, text):
         self.text_field.send_keys(''.join(text, '\n'))
         sleep(5)
     
-    def scroll_to_bottom(self): # doesn't completely work properly
-        self.driver.find_element_by_class_name('public-DraftStyleDefault-block').send_keys('in:mudae-rolls\n')
-        sleep(1)
+    def scroll_to_bottom(self): #TODO: rewrite with js & self.driver.execute_script
+        self.driver.find_element_by_class_name('public-DraftStyleDefault-block').send_keys('in:mudae-rolls'+Keys.ENTER)
+        WebDriverWait(self.driver, timeout=10, poll_frequency=0.2).until(lambda d: d.find_elements_by_class_name('hit-1fVM9e'))
         self.driver.find_element_by_class_name('hit-1fVM9e').find_element_by_class_name('header-23xsNx').click()
         self.driver.find_element_by_class_name('jumpButton-JkYoYK').click()
         self.driver.find_element_by_class_name('icon-38sknP').click()
-        #press end key to scroll remainder of page
+
+    def scroll_chat_down(self):
+        Message.get_context(self)
         self.driver.find_element_by_class_name('scroller-2LSbBU').click()
         #there must be a better way lol
         webdriver.ActionChains(self.driver).send_keys(Keys.END).perform()
-        sleep(1)
+        # myabe change Message.get_context to take driver as a param instead of bot (so that i could use 'd' in the lambda function - although i don't know if it matters)
+        # page has loaded if ~the page is at the bottom of the chat~ or ~the page has loaded any new messages (since all new messages load at once)~
+        WebDriverWait(self.driver, timeout=20, poll_frequency=0.02).until(lambda d: len(d.find_elements_by_class_name('wrapper-3vR61M')) < 2 or Message._context[0] != Message.get_context(self)[0])
 
 class Message:
     """Wrapper for 'message' WebElements within the discord html"""
@@ -188,6 +199,9 @@ class Message:
     def __eq__(self, other: Message) -> bool:
         return self.web_element.get_property('id') == other.web_element.get_property('id')
 
+    def __ne__(self, other):
+        return not self.__eq__(other)
+
 class MudaeMessage(Message): #message from a bot (not necessarily Mudae) - TODO: make more robust to ensure message is from Mudae
     
     def __init__(self, element: WebElement, context_index: int):
@@ -221,30 +235,14 @@ class LotteryMessage(MudaeMessage):
 
     def click_reaction(self, bot: HelperBot, index=0):
         #TODO: implement wait for reaction to appear (cause i know it will appear since it is a LotteryMessage)
-        sleep(1)
         reaction_elements: List[WebElement]
+        WebDriverWait(bot.driver, timeout=10, poll_frequency=0.05).until(
+            lambda d: self.web_element.find_elements_by_class_name(Message.reactions_element_class_name))
         reaction_elements = self.web_element.find_elements_by_class_name(Message.reactions_element_class_name)
         reaction_start_state = 'reactionMe-wv5HKu' in reaction_elements[index].get_attribute('class')
         print(self.web_element.text)
-        #NOTE: other elements on the page can block reactions - how do i get around this
-        #      so that it always works??
-        #      The problem seems to be the jump to bottom button getting in the way when the END key is pressed
-        #       to fix i will just add a down arrow pess in the case of failure
-        # this line seems to fix the issue
-        #webdriver.ActionChains(bot.driver).move_to_element(reaction_elements[index]).click(reaction_elements[index])
         bot.driver.execute_script('arguments[0].click()', reaction_elements[index].find_element_by_class_name('reactionInner-15NvIl'))
         #TODO: maybe start using screenshots for debugging
-        """
-        try: 
-            reaction_elements[index].click()
-        except ElementClickInterceptedException:
-            print('reaction click exception')
-            bot.driver.find_element_by_class_name('scroller-2LSbBU').click()
-            #there must be a better way lol
-            webdriver.ActionChains(bot.driver).send_keys(Keys.ARROW_DOWN).perform()
-            sleep(0.3)
-            reaction_elements[index].click()
-        """
         print('click')
         reaction_end_state = 'reactionMe-wv5HKu' in reaction_elements[index].get_attribute('class')
         assert reaction_start_state != reaction_end_state, f'start_state: {reaction_start_state}, end_state: {reaction_end_state}'
@@ -308,16 +306,4 @@ if __name__ == '__main__':
                 else:
                     print(' - '.join(['not married', msg.character]))
             msg.is_viewed = True
-        bot.driver.find_element_by_class_name('scroller-2LSbBU').click()
-        #there must be a better way lol
-        webdriver.ActionChains(bot.driver).send_keys(Keys.END).perform()
-        sleep(2)
-
-#WebElement().location_once_scrolled_into_view
-#%%
-"""
-reaction_elements: List[WebElement]
-reaction_elements = Message.get_context(bot)[0].web_element.find_elements_by_class_name(Message.reactions_element_class_name)
-print(reaction_elements[0])
-bot.driver.execute_script('arguments[0].click();', reaction_elements[0].find_element_by_class_name('reactionInner-15NvIl'))
-"""
+        bot.scroll_chat_down()
