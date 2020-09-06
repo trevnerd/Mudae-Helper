@@ -70,7 +70,7 @@ class HelperBot: #should rename to DiscordMessanger or DiscordDriver - and maybe
                     my_message = msg
                     return True
                 #if the message author is me, and the message contents are what i sent, then
-        WebDriverWait(self.driver, timeout=10, poll_frequency=0.1).until(message_in_chat, 'tried finding sent message in chat')
+        WebDriverWait(self.driver, timeout=10, poll_frequency=0.001).until(message_in_chat, 'tried finding sent message in chat')
         return my_message
     
     def scroll_to_bottom(self): #TODO: rewrite with js & self.driver.execute_script
@@ -330,47 +330,53 @@ time_stamp_element_selector = 'span.timestamp-3ZCmNB > span' # get aria-label pr
 #%%
 #log this data somewhere
 
-from threading import Timer
+from threading import Thread
+from time import time
 from typing import Callable
 from selenium.common.exceptions import TimeoutException
 
-def schedule_message_and_await_response(message: str, wait_time: float, bot: HelperBot, tries: int, sleep_time: float, is_response: Callable[[Message], bool]):
-    """wait_time is in seconds"""
-    #assert wait_time > 0, 'message does not need scheduling'
-    def send_and_await():
-        for i in range(tries):
-            returned_message: Message
-            print(i)
-            returned_message = bot.send_message(message)
-            print('mine', returned_message)
-            
-            def found_response(driver):
-                possible_responses = Message.get_context(driver)
-                # i save the index because im worried that Message.get_context will be called outside of the thread
-                returned_message_index = returned_message.context_index
-                if returned_message_index is not None: 
-                    possible_responses = possible_responses[:returned_message_index]
-                for msg in possible_responses:
-                    #check if msg matches outline of the expected response
-                    if is_response(msg): #expected response was found
-                        print(f'response found successfully after {i+1} attempts')
-                        return True
-                return False
+def send_and_await(message: str, bot: HelperBot, tries: int, sleep_time: float, is_response: Callable[[Message], bool]):
+    for i in range(tries):
+        returned_message: Message
+        #print(i)
+        returned_message = bot.send_message(message)
+        #print('mine', returned_message)
+        
+        def found_response(driver):
+            possible_responses = Message.get_context(driver)
+            # i save the index because im worried that Message.get_context will be called outside of the thread
+            returned_message_index = returned_message.context_index
+            if returned_message_index is not None: 
+                possible_responses = possible_responses[:returned_message_index]
+            for msg in possible_responses:
+                #check if msg matches outline of the expected response
+                if is_response(msg): #expected response was found
+                    print(f'response found successfully after {i+1} attempts')
+                    return True
+            return False
+        
+        #await response
+        try:
+            WebDriverWait(bot.driver, timeout=sleep_time, poll_frequency=0.2).until(found_response)
+            #success
+            return
+        except TimeoutException:
+            if i+1 >= tries: #weird if condition but i think it makes sense
+                raise TimeoutException(f'Response message was not found in {tries} attempts')
 
-            #await response
-            try:
-                WebDriverWait(bot.driver, timeout=sleep_time, poll_frequency=0.2).until(found_response)
-                #success
-                return
-            except TimeoutException:
-                if i+1 >= tries: #weird if condition but i think it makes sense
-                    raise TimeoutException(f'Response message was not found in {tries} attempts')
-            
-    Timer(wait_time, send_and_await).start()
+def interval_actions(bot: HelperBot):
+    while True:
+        start_time = time()
+        send_and_await('$m', bot, tries=15, sleep_time=4, is_response=lambda m: isinstance(m, MudaeMessage) and m.web_element.find_element_by_class_name('messageContent-2qWWxC').text.startswith('{0}, the roulette is limited to'.format(bot.username.split('#')[0])))
+        send_and_await('$p', bot, tries=3, sleep_time=10, is_response=lambda m: isinstance(m, MudaeMessage) and m.web_element.find_element_by_class_name('messageContent-2qWWxC').text.startswith('One try per interval of'))
+        send_and_await('$dk', bot, tries=3, sleep_time=10, is_response=lambda m: isinstance(m, MudaeMessage) and m.web_element.find_element_by_class_name('messageContent-2qWWxC').text.startswith('Next $dk reset in'))
+        end_time = time()
+        time_delta = end_time - start_time
+        sleep(3600-time_delta) #sleep for an hour
 
 def start_loop():
-    bot.scroll_chat_down()
-    schedule_message_and_await_response('$m', 5, bot, 15, 10, lambda m: m.web_element.find_element_by_class_name('messageContent-2qWWxC').text.startswith('{0}, the roulette is limited to'.format(bot.username.split('#')[0])))
+    #bot.scroll_chat_down()
+    Thread(target=interval_actions, args=[bot]).start()
     while True:
         for msg in Message.get_context(bot.driver):
             #print(msg)
@@ -386,6 +392,8 @@ def start_loop():
                     print(' - '.join(['I just married', msg.character]))
                 else:
                     print(' - '.join(['not married', msg.character]))
+            elif not isinstance(msg, MudaeMessage):
+                print(msg.web_element.find_element_by_class_name('messageContent-2qWWxC').text)
             msg.is_viewed = True
         bot.scroll_chat_down()
     
