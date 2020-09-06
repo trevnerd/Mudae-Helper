@@ -4,3 +4,4 @@ secret.py
 __pycache__
 debug.log
 helper_test.py
+*.png

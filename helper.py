@@ -20,7 +20,7 @@ if not os.path.isfile('secret.py'): #TODO: robustify
 import secret
 
 
-class HelperBot: #should rename to DiscordMessanger or something
+class HelperBot: #should rename to DiscordMessanger or DiscordDriver - and maybe have it subclass the driver?
     """An object which helps interact with a 'standard' discord page - maybe rename from HelperBot"""
     #TODO: make more generally applicable to any discord use
 
@@ -34,9 +34,16 @@ class HelperBot: #should rename to DiscordMessanger or something
         self.login()
         WebDriverWait(self.driver, timeout=15, poll_frequency=1).until(lambda d: d.find_element_by_class_name('container-1r6BKw'))
         self.driver.get(secret.mudae_channel)
-        WebDriverWait(self.driver, timeout=15, poll_frequency=1).until(lambda d: d.find_element_by_css_selector(HelperBot.text_field_element_selector))
-        self.text_field = self.driver.find_element_by_css_selector(HelperBot.text_field_element_selector)
+        #WebDriverWait(self.driver, timeout=15, poll_frequency=1).until(lambda d: d.find_element_by_css_selector(HelperBot.text_field_element_selector))
+        #self.text_field = self.driver.find_element_by_css_selector(HelperBot.text_field_element_selector)
         self.scroll_to_bottom()
+        self.username: str
+        self.username = ''.join(self.driver.find_element_by_class_name('nameTag-3uD-yy').text.split('\n'))
+
+    @property
+    def text_field(self):
+        WebDriverWait(self.driver, timeout=10, poll_frequency=0.02).until(lambda d: d.find_element_by_css_selector(HelperBot.text_field_element_selector))
+        return self.driver.find_element_by_css_selector(HelperBot.text_field_element_selector)
 
     def login(self):
         self.driver.get('https://discord.com/login')
@@ -44,11 +51,27 @@ class HelperBot: #should rename to DiscordMessanger or something
         self.driver.find_element_by_xpath('//*[@id="app-mount"]/div[2]/div/div[2]/div/div/form/div/div/div[1]/div[3]/div[1]/div/input').send_keys(secret.email)
         self.driver.find_element_by_xpath('//*[@id="app-mount"]/div[2]/div/div[2]/div/div/form/div/div/div[1]/div[3]/div[2]/div/input').send_keys(secret.pw)
         self.driver.find_element_by_xpath('//*[@id="app-mount"]/div[2]/div/div[2]/div/div/form/div/div/div[1]/div[3]/button[2]').click()
-        #sleep(5)
 
-    def send_message(self, text):
-        self.text_field.send_keys(''.join(text, '\n'))
-        sleep(5)
+    def send_message(self, text: str):
+        """sends a message to the chat and returns the Message object in the chat"""
+        most_recent_message = Message.get_context(self.driver)[0]
+        self.text_field.send_keys(''.join([text, '\n']))
+        my_message = text #replace text with Message object once found using the helper function
+        def message_in_chat(driver):
+            nonlocal most_recent_message
+            nonlocal my_message
+            static_context = Message.get_context(driver) #don't want it to append items to context in another thread
+            for msg in static_context:
+                #print(msg.context_index, most_recent_message.context_index)
+                if msg.context_index >= most_recent_message.context_index:
+                    most_recent_message = static_context[0]
+                    return False
+                elif msg.author == self.username and msg.web_element.find_element_by_class_name('messageContent-2qWWxC').text == text:
+                    my_message = msg
+                    return True
+                #if the message author is me, and the message contents are what i sent, then
+        WebDriverWait(self.driver, timeout=10, poll_frequency=0.1).until(message_in_chat, 'tried finding sent message in chat')
+        return my_message
     
     def scroll_to_bottom(self): #TODO: rewrite with js & self.driver.execute_script
         self.driver.find_element_by_class_name('public-DraftStyleDefault-block').send_keys('in:mudae-rolls'+Keys.ENTER)
@@ -58,13 +81,14 @@ class HelperBot: #should rename to DiscordMessanger or something
         self.driver.find_element_by_class_name('icon-38sknP').click()
 
     def scroll_chat_down(self):
-        Message.get_context(self)
-        self.driver.find_element_by_class_name('scroller-2LSbBU').click()
-        #there must be a better way lol
+        Message.get_context(self.driver)
+        #self.driver.find_element_by_class_name('scroller-2LSbBU').click()
+        #TODO: fix focusing issure
+        self.driver.execute_script('arguments[0].click()', self.driver.find_element_by_class_name('scroller-2LSbBU'))
         webdriver.ActionChains(self.driver).send_keys(Keys.END).perform()
         # myabe change Message.get_context to take driver as a param instead of bot (so that i could use 'd' in the lambda function - although i don't know if it matters)
         # page has loaded if ~the page is at the bottom of the chat~ or ~the page has loaded any new messages (since all new messages load at once)~
-        WebDriverWait(self.driver, timeout=20, poll_frequency=0.02).until(lambda d: len(d.find_elements_by_class_name('wrapper-3vR61M')) < 2 or Message._context[0] != Message.get_context(self)[0])
+        WebDriverWait(self.driver, timeout=20, poll_frequency=0.02).until(lambda d: len(d.find_elements_by_class_name('wrapper-3vR61M')) < 2 or Message._context[0] != Message.get_context(self.driver)[0])
 
 class Message:
     """Wrapper for 'message' WebElements within the discord html"""
@@ -78,12 +102,19 @@ class Message:
     bot_verif_element_class_name = 'botText-1526X_'
     reactions_element_class_name = 'reaction-1hd86g' 
 
-    def __init__(self, element: WebElement, context_index: int):
+    def __init__(self, element: WebElement, driver, context_index=None):
         self.web_element: WebElement
         self.web_element = element
+        #print(self.web_element.text)
+        #self.web_element.screenshot('message.png')
+
+        self.driver = driver
         
         self._context_index: int
         self._context_index = context_index
+
+        self.id: str
+        self.id = self.web_element.get_property('id')
 
         self.is_group_starter: bool
         try:
@@ -102,7 +133,10 @@ class Message:
         self._author: str
         if self.is_group_starter:
             try:
-                self._author = self.web_element.find_element_by_class_name(Message.author_element_class_name).text
+                driver.execute_script('arguments[0].click()', self.web_element.find_element_by_class_name(Message.author_element_class_name))
+                self._author = ''.join(driver.find_element_by_class_name('nameTag-m8r81H').text.split('\n'))
+                driver.execute_script('arguments[0].click()', self.web_element.find_element_by_class_name(Message.author_element_class_name))
+                #self._author = self.web_element.find_element_by_class_name(Message.author_element_class_name).text
             except NoSuchElementException:
                 #can occur because of pinned messages
                 self._author = 'Pin'
@@ -132,7 +166,7 @@ class Message:
 
     @property
     def group_starter(self) -> Message:
-        if self._group_starter is None:
+        if self._group_starter is None and self.context_index is not None:
             i = self.context_index+1
             while i < len(Message._context):
                 if Message._context[i].is_group_starter:
@@ -160,36 +194,44 @@ class Message:
     def context_index(self, index: int):
         self._context_index = index
 
+    #TODO: FIX VARIOUS MESSAGE STALE ROBLEMS IN THIS METHOD / increase the speed
     @staticmethod
-    def get_context(bot: HelperBot) -> List[Message]: #TODO: split method up?
+    def get_context(driver) -> List[Message]: #TODO: split method up?
+        #get rid of stale messages
+        fresh_old_messages: List[Message]
+        fresh_old_messages = []
+        for old_message in Message._context:
+            old_message: Message
+            try:
+                #use any method for a staleness check
+                old_message.web_element.is_enabled()
+                fresh_old_messages.append(old_message)
+            except StaleElementReferenceException:
+                old_message.context_index = None # this should not be necessary for anything
+        
+        #repalce Message._context with the new messages (while not rewriting old messages that are still fresh)
         web_elements: List[WebElement]
-        web_elements = bot.driver.find_elements_by_class_name(Message.message_element_class_name)[::-1] #newest first order
+        web_elements = driver.find_elements_by_class_name(Message.message_element_class_name)[::-1] #newest first order
         new_context: List[Message]
         new_context = []
         for i, web_element in enumerate(web_elements):
-            new_message = Message(web_element, i)
+            #this only fully makes sense if we are never scrolling upward
+            if len(fresh_old_messages) > 0 and web_element.get_property('id') == fresh_old_messages[0].id:
+                new_context.extend(fresh_old_messages)
+                Message.set_context(new_context)
+                return Message._context
+            
+            new_message = Message(web_element, driver)
             if new_message.is_from_bot: #TODO: generalize this subclass conversion process
-                new_message = MudaeMessage(web_element, i)
+                new_message = MudaeMessage(web_element, driver)
                 if LotteryMessage.is_lottery_message(new_message):
-                    new_message = LotteryMessage(web_element, i)
-            for old_message in Message._context:
-                try:
-                    if new_message == old_message:
-                        Message.set_context(new_context)
-                        return Message._context
-                except StaleElementReferenceException:
-                    #produce helpful info to get better fix
-                    print(i, new_message, old_message)
-                    Message._context = []
-                    return Message.get_context(bot)
-                    
+                    new_message = LotteryMessage(web_element, driver)
             new_context.append(new_message) #appends by newest first
         Message.set_context(new_context)
         return Message._context
     
     @staticmethod
     def set_context(new_context: List[Message]):
-        new_context = new_context + Message._context
         if len(new_context) >= 60:
             new_context = new_context[:60]
         for j, msg in enumerate(new_context):
@@ -197,15 +239,15 @@ class Message:
         Message._context = new_context
 
     def __eq__(self, other: Message) -> bool:
-        return self.web_element.get_property('id') == other.web_element.get_property('id')
+        return self.id == other.id
 
     def __ne__(self, other):
         return not self.__eq__(other)
 
 class MudaeMessage(Message): #message from a bot (not necessarily Mudae) - TODO: make more robust to ensure message is from Mudae
     
-    def __init__(self, element: WebElement, context_index: int):
-        Message.__init__(self, element, context_index)
+    def __init__(self, element: WebElement, driver,  context_index=None):
+        Message.__init__(self, element, driver, context_index=context_index)
 
         assert self.is_from_bot, 'Message is not from a bot'
 
@@ -215,10 +257,10 @@ class LotteryMessage(MudaeMessage):
     embed_description_element_class_name = 'embedDescription-1Cuq9a'
     message_footer_element_class_name = 'embedFooterText-28V_Wb'
 
-    def __init__(self, element: WebElement, context_index: int):
-        MudaeMessage.__init__(self, element, context_index)
+    def __init__(self, element: WebElement, driver, context_index=None):
+        MudaeMessage.__init__(self, element, driver, context_index=None)
         
-        assert self.is_lottery_message(), 'This is not a LotteryMessage'
+        #assert self.is_lottery_message(), f'This is not a LotteryMessage {self}'
 
         self.character: str
         self.character = self.web_element.find_element_by_class_name(LotteryMessage.character_name_element_class_name).text
@@ -255,8 +297,9 @@ class LotteryMessage(MudaeMessage):
             if len(images) == 1:
                 img_src_text = images[0].get_property('src') #why does get_property work here but not other places??
                 full_desc_text = self.web_element.find_element_by_class_name(LotteryMessage.embed_description_element_class_name).text
-        finally:
-            return img_src_text == 'https://cdn.discordapp.com/emojis/469835869059153940.png?v=1' and 'Claims: #' in full_desc_text and 'Likes: #' in full_desc_text
+        except:
+            return False
+        return img_src_text == 'https://cdn.discordapp.com/emojis/469835869059153940.png?v=1' and 'Claims: #' in full_desc_text and 'Likes: #' in full_desc_text
         
 
 # %%
@@ -288,10 +331,10 @@ time_stamp_element_selector = 'span.timestamp-3ZCmNB > span' # get aria-label pr
 
 #%%
 #log this data somewhere
-Message._context = [] # for jupyter server debugging
-if __name__ == '__main__':
+
+def start_loop():
     while True:
-        for msg in Message.get_context(bot):
+        for msg in Message.get_context(bot.driver):
             #print(msg)
             if msg.is_viewed:
                 break
@@ -307,3 +350,8 @@ if __name__ == '__main__':
                     print(' - '.join(['not married', msg.character]))
             msg.is_viewed = True
         bot.scroll_chat_down()
+    
+
+if __name__ == '__main__':
+    Message._context = [] # for jupyter server debugging
+    start_loop()
