@@ -21,8 +21,8 @@ import secret
 
 
 class HelperBot: #should rename to DiscordMessanger or DiscordDriver - and maybe have it subclass the driver?
-    """An object which helps interact with a 'standard' discord page - maybe rename from HelperBot"""
-    #TODO: make more generally applicable to any discord use
+    """An object which helps interact with a 'standard' discord page"""
+    #TODO: make more generally applicable to any discord use - maybe rename from HelperBot
 
     #CONSTANTS
     text_field_element_selector = '#app-mount > div.app-1q1i1E > div > div.layers-3iHuyZ.layers-3q14ss > div > div > div > div.content-98HsJk > div.chat-3bRxxu > div > main > form > div > div > div > div > div.textArea-12jD-V.textAreaSlate-1ZzRVj.slateContainer-3Qkn2x > div.markup-2BOw-j.slateTextArea-1Mkdgw.fontSize16Padding-3Wk7zP > div'
@@ -34,7 +34,7 @@ class HelperBot: #should rename to DiscordMessanger or DiscordDriver - and maybe
         self.login()
         WebDriverWait(self.driver, timeout=15, poll_frequency=1).until(lambda d: d.find_element_by_class_name('container-1r6BKw'))
         self.driver.get(secret.mudae_channel)
-        #WebDriverWait(self.driver, timeout=15, poll_frequency=1).until(lambda d: d.find_element_by_css_selector(HelperBot.text_field_element_selector))
+        WebDriverWait(self.driver, timeout=15, poll_frequency=1).until(lambda d: d.find_element_by_css_selector(HelperBot.text_field_element_selector))
         #self.text_field = self.driver.find_element_by_css_selector(HelperBot.text_field_element_selector)
         self.scroll_to_bottom()
         self.username: str
@@ -94,6 +94,7 @@ class Message:
     """Wrapper for 'message' WebElements within the discord html"""
     _context: List[Message]
     _context = [] #holds messages based on what an associated HelperBot sees - in newest frist order
+    running_get_context = False
     
     #CONSTANTS
     message_element_class_name = 'message-2qnXI6'
@@ -134,12 +135,17 @@ class Message:
         if self.is_group_starter:
             try:
                 driver.execute_script('arguments[0].click()', self.web_element.find_element_by_class_name(Message.author_element_class_name))
+                #NOTE: I'm worried that two seperately threaded calls to get_context could cause problems here due to
+                #      the fact that it might interfere by trying to open seperate nameTag-m8r81H elements at the same time
+                #      thus causing a confusion between authors. - i did add a Message.running_get_context flag to try and stop this
                 self._author = ''.join(driver.find_element_by_class_name('nameTag-m8r81H').text.split('\n'))
                 driver.execute_script('arguments[0].click()', self.web_element.find_element_by_class_name(Message.author_element_class_name))
                 #self._author = self.web_element.find_element_by_class_name(Message.author_element_class_name).text
             except NoSuchElementException:
                 #can occur because of pinned messages
                 self._author = 'Pin'
+            #except StaleElementReferenceException:
+            #    self._author = 'Unknown'
         else:
             self._author = 'Unknown'
 
@@ -154,15 +160,6 @@ class Message:
             self._is_from_bot = None
             
         self.is_viewed = False
-
-    """
-    def click_reaction(self, index: int, bot: HelperBot): #TODO: extend the functionality of reactions interactions
-        try:
-            reaction_elements = self.web_element.find_elements_by_class_name(Message.reactions_element_class_name)
-            reaction_elements[i].click()
-        except: #TODO: decide how to handel exceptions to warn of problem of IndexError and NoSuchElementException
-            pass
-    """
 
     @property
     def group_starter(self) -> Message:
@@ -194,9 +191,13 @@ class Message:
     def context_index(self, index: int):
         self._context_index = index
 
-    #TODO: FIX VARIOUS MESSAGE STALE ROBLEMS IN THIS METHOD / increase the speed
     @staticmethod
-    def get_context(driver) -> List[Message]: #TODO: split method up?
+    def get_context(driver) -> List[Message]:
+        #I think that we never want two different threads to be running this at the same time 
+        # - I may be doing this in a completely dumb way
+        WebDriverWait(driver, timeout=30, poll_frequency=0.1).until_not(lambda d: Message.running_get_context)
+        Message.running_get_context = True
+
         #get rid of stale messages
         fresh_old_messages: List[Message]
         fresh_old_messages = []
@@ -218,9 +219,7 @@ class Message:
             #this only fully makes sense if we are never scrolling upward
             if len(fresh_old_messages) > 0 and web_element.get_property('id') == fresh_old_messages[0].id:
                 new_context.extend(fresh_old_messages)
-                Message.set_context(new_context)
-                return Message._context
-            
+                break
             new_message = Message(web_element, driver)
             if new_message.is_from_bot: #TODO: generalize this subclass conversion process
                 new_message = MudaeMessage(web_element, driver)
@@ -228,6 +227,7 @@ class Message:
                     new_message = LotteryMessage(web_element, driver)
             new_context.append(new_message) #appends by newest first
         Message.set_context(new_context)
+        Message.running_get_context = False
         return Message._context
     
     @staticmethod
@@ -276,7 +276,6 @@ class LotteryMessage(MudaeMessage):
             self.is_married = False
 
     def click_reaction(self, bot: HelperBot, index=0):
-        #TODO: implement wait for reaction to appear (cause i know it will appear since it is a LotteryMessage)
         reaction_elements: List[WebElement]
         WebDriverWait(bot.driver, timeout=10, poll_frequency=0.05).until(
             lambda d: self.web_element.find_elements_by_class_name(Message.reactions_element_class_name))
@@ -284,7 +283,6 @@ class LotteryMessage(MudaeMessage):
         reaction_start_state = 'reactionMe-wv5HKu' in reaction_elements[index].get_attribute('class')
         print(self.web_element.text)
         bot.driver.execute_script('arguments[0].click()', reaction_elements[index].find_element_by_class_name('reactionInner-15NvIl'))
-        #TODO: maybe start using screenshots for debugging
         print('click')
         reaction_end_state = 'reactionMe-wv5HKu' in reaction_elements[index].get_attribute('class')
         assert reaction_start_state != reaction_end_state, f'start_state: {reaction_start_state}, end_state: {reaction_end_state}'
@@ -332,7 +330,47 @@ time_stamp_element_selector = 'span.timestamp-3ZCmNB > span' # get aria-label pr
 #%%
 #log this data somewhere
 
+from threading import Timer
+from typing import Callable
+from selenium.common.exceptions import TimeoutException
+
+def schedule_message_and_await_response(message: str, wait_time: float, bot: HelperBot, tries: int, sleep_time: float, is_response: Callable[[Message], bool]):
+    """wait_time is in seconds"""
+    #assert wait_time > 0, 'message does not need scheduling'
+    def send_and_await():
+        for i in range(tries):
+            returned_message: Message
+            print(i)
+            returned_message = bot.send_message(message)
+            print('mine', returned_message)
+            
+            def found_response(driver):
+                possible_responses = Message.get_context(driver)
+                # i save the index because im worried that Message.get_context will be called outside of the thread
+                returned_message_index = returned_message.context_index
+                if returned_message_index is not None: 
+                    possible_responses = possible_responses[:returned_message_index]
+                for msg in possible_responses:
+                    #check if msg matches outline of the expected response
+                    if is_response(msg): #expected response was found
+                        print(f'response found successfully after {i+1} attempts')
+                        return True
+                return False
+
+            #await response
+            try:
+                WebDriverWait(bot.driver, timeout=sleep_time, poll_frequency=0.2).until(found_response)
+                #success
+                return
+            except TimeoutException:
+                if i+1 >= tries: #weird if condition but i think it makes sense
+                    raise TimeoutException(f'Response message was not found in {tries} attempts')
+            
+    Timer(wait_time, send_and_await).start()
+
 def start_loop():
+    bot.scroll_chat_down()
+    schedule_message_and_await_response('$m', 5, bot, 15, 10, lambda m: m.web_element.find_element_by_class_name('messageContent-2qWWxC').text.startswith('{0}, the roulette is limited to'.format(bot.username.split('#')[0])))
     while True:
         for msg in Message.get_context(bot.driver):
             #print(msg)
