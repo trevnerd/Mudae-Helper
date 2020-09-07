@@ -62,7 +62,6 @@ class HelperBot: #should rename to DiscordMessanger or DiscordDriver - and maybe
             nonlocal my_message
             static_context = Message.get_context(driver) #don't want it to append items to context in another thread
             for msg in static_context:
-                #print(msg.context_index, most_recent_message.context_index)
                 if msg.context_index >= most_recent_message.context_index:
                     most_recent_message = static_context[0]
                     return False
@@ -103,50 +102,38 @@ class Message:
     bot_verif_element_class_name = 'botText-1526X_'
     reactions_element_class_name = 'reaction-1hd86g' 
 
-    def __init__(self, element: WebElement, driver, context_index=None):
-        self.web_element: WebElement
-        self.web_element = element
+    def __init__(self, element: WebElement, driver, context_index=None, group_starter=None): 
+        self._web_element: WebElement
+        self._web_element = element
         #print(self.web_element.text)
         #self.web_element.screenshot('message.png')
+        self.id: str
+        self.id = self._web_element.get_property('id')
 
         self.driver = driver
         
         self.context_index: int
         self.context_index = context_index
 
-        self.id: str
-        self.id = self.web_element.get_property('id')
 
         self.content: str
         self.content = self.web_element.find_element_by_class_name('messageContent-2qWWxC').text
 
         self.is_group_starter: bool
-        #try:
         self.is_group_starter = Message.message_element_group_start_class_name in self.web_element.get_attribute('class').split(' ')
-        #except StaleElementReferenceException:
-        #    #TODO: find a better way to handel all stale web_elements
-        #    print('stale element for some reason!')
-        #    self.is_group_starter = None
 
-        self._group_starter: Message
+        self.group_starter: Message
         if self.is_group_starter:
-            self._group_starter = self
+            self.group_starter = self
         else:
-            self._group_starter = None
+            self.group_starter = group_starter
 
         self._author: str
         if self.is_group_starter:
             try:
-                #doubt the wait will fix the problem but let's just try
-                WebDriverWait(driver, timeout=4, poll_frequency=0.01).until(lambda d: self.web_element.find_element_by_class_name(Message.author_element_class_name))
                 driver.execute_script('arguments[0].click()', self.web_element.find_element_by_class_name(Message.author_element_class_name))
-                #NOTE: I'm worried that two seperately threaded calls to get_context could cause problems here due to
-                #      the fact that it might interfere by trying to open seperate nameTag-m8r81H elements at the same time
-                #      thus causing a confusion between authors. - i did add a Message.running_get_context flag to try and stop this
-                WebDriverWait(driver, timeout=4, poll_frequency=0.01).until(lambda d: d.find_element_by_class_name('nameTag-m8r81H'))
                 self._author = ''.join(driver.find_element_by_class_name('nameTag-m8r81H').text.split('\n'))
                 driver.execute_script('arguments[0].click()', self.web_element.find_element_by_class_name(Message.author_element_class_name))
-                #self._author = self.web_element.find_element_by_class_name(Message.author_element_class_name).text
             except NoSuchElementException:
                 #can occur because of pinned messages
                 self._author = 'Pin'
@@ -154,7 +141,7 @@ class Message:
             #    Message.running_get_context
             #    self._author = 'Unknown'
         else:
-            self._author = 'Unknown'
+            self._author = None #None means unknown in this context
 
         self._is_from_bot: bool
         if self.is_group_starter:
@@ -169,28 +156,18 @@ class Message:
         self.is_viewed = False
 
     @property
-    def group_starter(self) -> Message:
-        if self._group_starter is None and self.context_index is not None:
-            #static_context = Message.get_context(self.driver) #not allowed to do since is_from_bot calls this and get_context calls is_from_bot - causing gridlock (or whatever the cs term for it is)
-            #this function is indirectly called from get_context - so make things static
-            static_context = Message._context #.copy() if we ever directly modify Message._context (ex Message._context.append(Message(...)))
-            i = self.context_index+1
-            while i < len(static_context):
-                if static_context[i].is_group_starter:
-                    self._group_starter = static_context[i]
-                    break
-                i += 1
-        return self._group_starter
+    def web_element(self):
+        return self.driver.find_element_by_id(self.id)
 
     @property
-    def author(self) -> str: #TODO: find more robust identifier than just a string
-        if self.group_starter is not None:
+    def author(self) -> str:
+        if self.group_starter is not None and self._author is None:
             self._author = self.group_starter._author
         return self._author
-
+    
     @property
     def is_from_bot(self):
-        if self.group_starter is not None:
+        if self.group_starter is not None and self._is_from_bot is None:
             self._is_from_bot = self.group_starter._is_from_bot
         return self._is_from_bot
 
@@ -218,28 +195,46 @@ class Message:
         web_elements = driver.find_elements_by_class_name(Message.message_element_class_name)[::-1] #newest first order
         new_context: List[Message]
         new_context = []
+        fresh_old_messages_start_index = None
         for i, web_element in enumerate(web_elements):
             if i >= 40: #only allow Message._context to hold max of 40 elements
                 break
             #this only fully makes sense if we are never scrolling upward
             elif len(fresh_old_messages) > 0 and web_element.get_property('id') == fresh_old_messages[0].id:
                 new_context.extend(fresh_old_messages)
+                fresh_old_messages_start_index = i
+                if len(new_context) > 40:
+                    new_context = new_context[:40]
                 break
             new_message = Message(web_element, driver)
-            if new_message.is_from_bot: #TODO: generalize this subclass conversion process
-                new_message = MudaeMessage(web_element, driver)
-                if LotteryMessage.is_lottery_message(new_message):
-                    new_message = LotteryMessage(web_element, driver)
             new_context.append(new_message) #appends by newest first
-        Message.set_context(new_context)
+        i = len(new_context)-1
+        while i >= 0:
+            #update message old indices to match new messages
+            if fresh_old_messages_start_index is not None and i >= fresh_old_messages_start_index:
+                new_context[i].context_index = i
+                i -= 1
+                continue
+            #guarantee that new_context[i] has a group_starter
+            if new_context[i].group_starter is None:
+                if i+1 < len(new_context):
+                    new_context[i].group_starter = new_context[i+1].group_starter
+                else: #pop the last element if no group_starter
+                    new_context.pop()
+                    i -= 1
+                    continue
+            #classify type of message
+            if new_context[i].is_from_bot:
+                new_context[i] = MudaeMessage(new_context[i].web_element, driver, context_index=i, group_starter=new_context[i].group_starter)
+                if LotteryMessage.is_lottery_message(new_context[i]): #check if lottery message
+                    new_context[i] = LotteryMessage(new_context[i].web_element, driver, context_index=i, group_starter=new_context[i].group_starter)
+            else:
+                new_context[i].context_index = i
+            i -= 1
+        #set context
+        Message._context = new_context
         Message.running_get_context = False
         return Message._context
-    
-    @staticmethod
-    def set_context(new_context: List[Message]):
-        for j, msg in enumerate(new_context):
-            msg.context_index = j
-        Message._context = new_context
 
     def __repr__(self):
         str_rep = \
@@ -248,6 +243,7 @@ class Message:
                     \tauthor - {self.author},
                     \tis_group_starter - {self.is_group_starter},
                     \tgroup_starter.id - {self.group_starter.id},
+                    \tcontext_index - {self.context_index},
                     \tsubclass - {type(self).__name__},
                     \tcontent - {self.content}
                     '''
@@ -261,8 +257,8 @@ class Message:
 
 class MudaeMessage(Message): #message from a bot (not necessarily Mudae) - TODO: make more robust to ensure message is from Mudae
     
-    def __init__(self, element: WebElement, driver,  context_index=None):
-        Message.__init__(self, element, driver, context_index=context_index)
+    def __init__(self, element: WebElement, driver,  context_index=None, group_starter=None):
+        Message.__init__(self, element, driver, context_index=context_index, group_starter=group_starter)
 
         assert self.is_from_bot, 'Message is not from a bot'
 
@@ -272,8 +268,8 @@ class LotteryMessage(MudaeMessage):
     embed_description_element_class_name = 'embedDescription-1Cuq9a'
     message_footer_element_class_name = 'embedFooterText-28V_Wb'
 
-    def __init__(self, element: WebElement, driver, context_index=None):
-        MudaeMessage.__init__(self, element, driver, context_index=None)
+    def __init__(self, element: WebElement, driver, context_index=None, group_starter=None):
+        MudaeMessage.__init__(self, element, driver, context_index=context_index, group_starter=group_starter)
         
         #assert self.is_lottery_message(), f'This is not a LotteryMessage {self}'
 
@@ -321,6 +317,7 @@ class LotteryMessage(MudaeMessage):
                     \tauthor - {self.author},
                     \tis_group_starter - {self.is_group_starter},
                     \tgroup_starter.id - {self.group_starter.id},
+                    \tcontext_index - {self.context_index},
                     \tsubclass - {type(self).__name__},
                     \tcharacter - {self.character}
                     '''
