@@ -394,20 +394,21 @@ def interval_actions(bot: HelperBot):
     sleep(8)
     send_logger = logging.getLogger(__name__)
     send_logger.setLevel(logging.DEBUG)
-    send_logger.addHandler(logging.FileHandler('sending.log'))
-    try:
-        while True:
-            start_time = time()
+    send_handler = logging.FileHandler('sending.log')
+    send_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+    send_logger.addHandler(send_handler)
+    while True:
+        start_time = time()
+        try:
             send_and_await('$ma', bot, tries=15, sleep_time=4, is_response=lambda m: isinstance(m, MudaeMessage) and m.content.startswith('{0}, the roulette is limited to'.format(bot.username.split('#')[0])))
             send_and_await('$p', bot, tries=3, sleep_time=10, is_response=lambda m: isinstance(m, MudaeMessage) and m.content.startswith('One try per interval of'))
             send_and_await('$dk', bot, tries=3, sleep_time=5, is_response=lambda m: isinstance(m, MudaeMessage) and m.content.startswith('Next $dk reset in'))
             send_and_await('$daily', bot, tries=3, sleep_time=5, is_response=lambda m: isinstance(m, MudaeMessage) and m.content.startswith('Next $daily reset in'))
-            end_time = time()
-            time_delta = end_time - start_time
-            sleep(3600-time_delta) #sleep for an hour
-    except Exception as e:
-        send_logger.exception('sending thread failed')
-        raise e
+        except Exception as e:
+            send_logger.exception('sending thread failed')
+        end_time = time()
+        time_delta = end_time - start_time
+        sleep(3600-time_delta) #sleep for an hour
 
 
 from wishes import wishlist
