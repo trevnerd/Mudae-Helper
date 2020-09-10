@@ -2,6 +2,7 @@ mudae-env
 .vscode
 secret.py
 __pycache__
-debug.log
 helper_test.py
+*.log
 *.png
+wishes.py

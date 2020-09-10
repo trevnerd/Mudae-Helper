@@ -2,13 +2,13 @@
 from __future__ import annotations #fixes type checking for a class within itself
 from selenium import webdriver
 #from selenium.webdriver import WebDriver
-from time import sleep
+import logging
+from time import sleep, time
 from selenium.webdriver.remote.webelement import WebElement
 from selenium.common.exceptions import NoSuchElementException, StaleElementReferenceException, ElementClickInterceptedException
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from typing import List
-from bs4 import BeautifulSoup
 
 import os
 from getpass import getpass
@@ -115,6 +115,7 @@ class Message:
         self.context_index: int
         self.context_index = context_index
 
+        self.send_time = time()
 
         self.content: str
         self.content = self.web_element.find_element_by_class_name('messageContent-2qWWxC').text
@@ -189,6 +190,8 @@ class Message:
                 fresh_old_messages.append(old_message)
             except StaleElementReferenceException:
                 old_message.context_index = None # this should not be necessary for anything
+            except NoSuchElementException: #this could happen if the message is deleted
+                old_message.context_index = None
         
         #repalce Message._context with the new messages (while not rewriting old messages that are still fresh)
         web_elements: List[WebElement]
@@ -271,14 +274,14 @@ class LotteryMessage(MudaeMessage):
     def __init__(self, element: WebElement, driver, context_index=None, group_starter=None):
         MudaeMessage.__init__(self, element, driver, context_index=context_index, group_starter=group_starter)
         
-        #assert self.is_lottery_message(), f'This is not a LotteryMessage {self}'
+        assert self.is_lottery_message(), f'This is not a LotteryMessage {self}'
 
         self.character: str
         self.character = self.web_element.find_element_by_class_name(LotteryMessage.character_name_element_class_name).text
         
         self.value: int
         self.value = int(self.web_element.find_element_by_class_name(LotteryMessage.embed_description_element_class_name).find_element_by_tag_name('strong').text)
-        
+
         self.is_married: bool
         try:
             message_footer = self.web_element.find_element_by_class_name(LotteryMessage.message_footer_element_class_name).text
@@ -355,7 +358,6 @@ time_stamp_element_selector = 'span.timestamp-3ZCmNB > span' # get aria-label pr
 #log this data somewhere
 
 from threading import Thread
-from time import time
 from typing import Callable
 from selenium.common.exceptions import TimeoutException
 
@@ -390,14 +392,25 @@ def send_and_await(message: str, bot: HelperBot, tries: int, sleep_time: float, 
 
 def interval_actions(bot: HelperBot):
     sleep(8)
-    while True:
-        start_time = time()
-        send_and_await('$m', bot, tries=15, sleep_time=4, is_response=lambda m: isinstance(m, MudaeMessage) and m.content.startswith('{0}, the roulette is limited to'.format(bot.username.split('#')[0])))
-        send_and_await('$p', bot, tries=3, sleep_time=10, is_response=lambda m: isinstance(m, MudaeMessage) and m.content.startswith('One try per interval of'))
-        send_and_await('$dk', bot, tries=3, sleep_time=10, is_response=lambda m: isinstance(m, MudaeMessage) and m.content.startswith('Next $dk reset in'))
-        end_time = time()
-        time_delta = end_time - start_time
-        sleep(3600-time_delta) #sleep for an hour
+    send_logger = logging.getLogger(__name__)
+    send_logger.setLevel(logging.DEBUG)
+    send_logger.addHandler(logging.FileHandler('sending.log'))
+    try:
+        while True:
+            start_time = time()
+            send_and_await('$ma', bot, tries=15, sleep_time=4, is_response=lambda m: isinstance(m, MudaeMessage) and m.content.startswith('{0}, the roulette is limited to'.format(bot.username.split('#')[0])))
+            send_and_await('$p', bot, tries=3, sleep_time=10, is_response=lambda m: isinstance(m, MudaeMessage) and m.content.startswith('One try per interval of'))
+            send_and_await('$dk', bot, tries=3, sleep_time=5, is_response=lambda m: isinstance(m, MudaeMessage) and m.content.startswith('Next $dk reset in'))
+            send_and_await('$daily', bot, tries=3, sleep_time=5, is_response=lambda m: isinstance(m, MudaeMessage) and m.content.startswith('Next $daily reset in'))
+            end_time = time()
+            time_delta = end_time - start_time
+            sleep(3600-time_delta) #sleep for an hour
+    except Exception as e:
+        send_logger.exception('sending thread failed')
+        raise e
+
+
+from wishes import wishlist
 
 def start_loop():
     #bot.scroll_chat_down()
@@ -413,7 +426,7 @@ def start_loop():
                 if msg.is_married:
                     msg.click_reaction(bot)
                     print(' - '.join(['married', msg.character]))
-                elif msg.value > 200:
+                elif msg.character in wishlist or msg.value > 200:
                     msg.click_reaction(bot)
                     print(' - '.join(['I just married', msg.character]))
                 else:
